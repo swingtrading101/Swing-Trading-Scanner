@@ -1,4 +1,4 @@
-name: Swing Scanner
+3name: Swing Scanner
 
 on:
   workflow_dispatch:  # Run manually from Actions tab
@@ -18,10 +18,11 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install dependencies
+            - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install yfinance pandas numpy ta scipy requests lxml
+          python -m pip install --upgrade pip
+          pip install yfinance pandas numpy ta scipy requests yahoo_fin lxml
+
 
       - name: Run Swing Scanner
         env:
