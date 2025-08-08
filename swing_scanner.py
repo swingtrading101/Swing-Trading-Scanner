@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Swing Scanner (CI-ready)
+Swing Scanner — CI-ready, fast ALL_US universe with prefilter
 
-- Scans a universe (S&P 500 by default) for your swing criteria
-- Sends Telegram alert using env vars: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-- Prints a compact table to CI logs
-- Exports a CSV artifact to the run directory
+- Universe: S&P500 or ALL_US (NASDAQ/NYSE/AMEX via yahoo_fin)
+- Prefilter: price & 5-day avg volume + hard cap by recent volume
+- Criteria: ADR>5%, AvgVol(30d)>30M, Price>$1, RS top 2%, above 22SMA
+- Alerts: Telegram via env vars TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+- Output: prints top matches + saves a CSV
 
-Dependencies (install in CI):
-  pip install yfinance pandas numpy ta scipy requests
+Dependencies: yfinance pandas numpy ta scipy requests yahoo_fin lxml
 """
 
 import os
@@ -19,35 +19,29 @@ import yfinance as yf
 from datetime import datetime
 from ta.trend import SMAIndicator
 from scipy.stats import linregress
+from yahoo_fin import stock_info as si   # for ALL_US universe
 
 pd.options.display.float_format = '{:,.2f}'.format
 
-# ========= CONFIG =========
-UNIVERSE = os.getenv("UNIVERSE", "ALL_US")
-   # "S&P500" or "Custom List"
-CUSTOM_TICKERS = os.getenv("CUSTOM_TICKERS", "")  # CSV, e.g. "AAPL,MSFT,NVDA"
+# ========= CONFIG (overridable via env) =========
+UNIVERSE = os.getenv("UNIVERSE", "ALL_US")        # "S&P500" or "ALL_US" or "Custom List"
+CUSTOM_TICKERS = os.getenv("CUSTOM_TICKERS", "")  # CSV list if you use "Custom List"
 
 LOOKBACK_MONTHS_RS = int(os.getenv("LOOKBACK_MONTHS_RS", "6"))
 ADR_PERIOD = int(os.getenv("ADR_PERIOD", "14"))
 MA_PERIOD = int(os.getenv("MA_PERIOD", "22"))
 AVG_VOL_LOOKBACK = int(os.getenv("AVG_VOL_LOOKBACK", "30"))
 
-# Consolidation detection
-CONS_LOOKBACK = int(os.getenv("CONS_LOOKBACK", "15"))
-MAX_RANGE_PCT = float(os.getenv("MAX_RANGE_PCT", "12.0"))
-REQUIRE_LOWER_HIGHS_HIGHER_LOWS = os.getenv("REQUIRE_TRIANGLE", "1") == "1"
-BREAKOUT_BUFFER_PCT = float(os.getenv("BREAKOUT_BUFFER_PCT", "0.3"))
+# Prefilter (to keep ALL_US fast)
+PREFILTER_MIN_PRICE = float(os.getenv("PREFILTER_MIN_PRICE", "3.0"))          # only scan $3+
+PREFILTER_MIN_AVG_VOL = float(os.getenv("PREFILTER_MIN_AVG_VOL", "5000000"))  # 5M+ shares (5‑day avg)
+PREFILTER_TOP_N_BY_VOL = int(os.getenv("PREFILTER_TOP_N_BY_VOL", "1500"))     # cap universe
 
-# Risk (not used in CI, but kept for completeness)
-MAX_RISK_DOLLARS = float(os.getenv("MAX_RISK_DOLLARS", "500"))
-
-# Telegram creds from env (set as GitHub Secrets)
+# Telegram creds (set as GitHub Secrets)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# ========= CORE HELPERS =========
-from yahoo_fin import stock_info as si
-
+# ========= HELPERS =========
 def get_universe(universe="S&P500", custom_list=None):
     if universe == "S&P500":
         tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
@@ -55,24 +49,29 @@ def get_universe(universe="S&P500", custom_list=None):
         tickers = [t.replace('.', '-') for t in tickers]
     elif universe == "ALL_US":
         tickers = si.tickers_nasdaq() + si.tickers_other()
-        tickers = [t for t in tickers if t.isalpha()]  # filter out weird tickers
+        # strip weirds (ETF symbols often have hyphens/periods; keep letters only)
+        tickers = [t for t in tickers if t.isalpha()]
     elif universe == "Custom List":
-        return [t.strip().upper() for t in (custom_list or "").split(",") if t.strip()]
+        tickers = [t.strip().upper() for t in (custom_list or "").split(",") if t.strip()]
     else:
         tickers = []
     return sorted(list(set(tickers)))
 
+def safe_download(t, period="6mo", interval="1d"):
+    try:
+        df = yf.download(t, period=period, interval=interval,
+                         auto_adjust=False, progress=False)
+        if isinstance(df.columns, pd.MultiIndex):
+            df = df.swaplevel(axis=1)[t]
+        return df.dropna()
+    except Exception:
+        return pd.DataFrame()
 
 def compute_adr(df, period=14):
     dr = df['High'] - df['Low']
     return dr.rolling(period).mean()
 
 def rs_percentile(tickers, months=6, benchmark='SPY'):
-    """
-    Robust RS percentile vs SPY:
-    - uses adjusted close
-    - aligns dates to avoid 'identically-labeled' errors
-    """
     bench = yf.download(benchmark, period=f"{months*32}d", interval="1d",
                         auto_adjust=True, progress=False)['Close'].dropna()
     results = {}
@@ -86,23 +85,13 @@ def rs_percentile(tickers, months=6, benchmark='SPY'):
             px = px.reindex(bench_sync.index).ffill().dropna()
             if len(px) < 2:
                 continue
-            r_stock = (px.iloc[-1] / px.iloc[0]) - 1
-            r_bench = (bench_sync.iloc[-1] / bench_sync.iloc[0]) - 1
-            results[t] = float(r_stock - r_bench)
+            r_stock = float(px.iloc[-1] / px.iloc[0] - 1)
+            r_bench = float(bench_sync.iloc[-1] / bench_sync.iloc[0] - 1)
+            results[t] = r_stock - r_bench
         except Exception:
             pass
     ser = pd.Series(results)
     return ser.rank(pct=True)  # 0..1
-
-def safe_download(t, period="6mo", interval="1d"):
-    try:
-        df = yf.download(t, period=period, interval=interval,
-                         auto_adjust=False, progress=False)
-        if isinstance(df.columns, pd.MultiIndex):
-            df = df.swaplevel(axis=1)[t]
-        return df.dropna()
-    except Exception:
-        return pd.DataFrame()
 
 def check_consolidation_and_breakout(df, lookback=15, max_range_pct=12.0,
                                      require_triangle=True, breakout_buffer_pct=0.3):
@@ -111,7 +100,7 @@ def check_consolidation_and_breakout(df, lookback=15, max_range_pct=12.0,
     window = df.iloc[-lookback:]
     hi = window['High'].values
     lo = window['Low'].values
-    close = df['Close'].iloc[-1]
+    close = float(df['Close'].iloc[-1])
     high_recent = float(np.max(hi))
     low_recent  = float(np.min(lo))
     rng_pct = (high_recent - low_recent) / max(1e-9, close) * 100.0
@@ -126,13 +115,8 @@ def check_consolidation_and_breakout(df, lookback=15, max_range_pct=12.0,
     brk = False
     if cons:
         breakout_level = high_recent * (1 + breakout_buffer_pct/100.0)
-        brk = df['Close'].iloc[-1] > breakout_level
+        brk = close > breakout_level
     return cons, brk, high_recent, low_recent
-
-def position_size(entry, stop, max_risk_dollars=500):
-    risk_per_share = max(1e-8, abs(entry - stop))
-    qty = int(max_risk_dollars // risk_per_share)
-    return max(qty, 0)
 
 def send_telegram_message(token, chat_id, text):
     if not token or not chat_id:
@@ -146,11 +130,51 @@ def send_telegram_message(token, chat_id, text):
     except Exception:
         return False
 
+# ---- Prefilter helpers (speed for ALL_US) ----
+def prefilter_tickers(tickers, min_price=3.0, min_avg_vol=5_000_000):
+    kept = []
+    for t in tickers:
+        try:
+            df = yf.download(t, period="7d", interval="1d", auto_adjust=False, progress=False)
+            if df.empty or len(df) < 2:
+                continue
+            price = float(df["Close"].iloc[-1])
+            avg5  = float(df["Volume"].tail(5).mean())
+            if (price >= min_price) and (avg5 >= min_avg_vol):
+                kept.append(t)
+        except Exception:
+            pass
+    return kept
+
+def cap_by_recent_volume(tickers, top_n=1500):
+    scored = []
+    for t in tickers:
+        try:
+            d = yf.download(t, period="7d", interval="1d", progress=False)
+            if d.empty:
+                continue
+            scored.append((t, float(d["Volume"].tail(5).mean())))
+        except Exception:
+            pass
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [t for t, _ in scored[:top_n]]
+
 # ========= SCAN / ALERT / EXPORT =========
 def run_scan():
     tickers = get_universe(UNIVERSE, CUSTOM_TICKERS)
-    print(f"Universe size: {len(tickers)}")
+    print(f"Universe size (raw): {len(tickers)}")
 
+    if UNIVERSE == "ALL_US":
+        tickers = prefilter_tickers(
+            tickers,
+            min_price=PREFILTER_MIN_PRICE,
+            min_avg_vol=PREFILTER_MIN_AVG_VOL
+        )
+        print(f"Universe after prefilter: {len(tickers)}")
+        tickers = cap_by_recent_volume(tickers, top_n=PREFILTER_TOP_N_BY_VOL)
+        print(f"Universe after cap: {len(tickers)}")
+
+    # RS first (only on the reduced set)
     rs_series = rs_percentile(tickers, months=LOOKBACK_MONTHS_RS, benchmark='SPY')
     rs_dict = rs_series.to_dict()
 
@@ -176,9 +200,8 @@ def run_scan():
             if pd.isna(adr_val):
                 continue
             adr_pct = float((adr_val / price) * 100.0)
-
             avg_vol = float(df['Volume'].rolling(AVG_VOL_LOOKBACK).mean().iloc[-1])
-            ma = SMAIndicator(df['Close'], window=MA_PERIOD).sma_indicator().iloc[-1]
+            ma = float(SMAIndicator(df['Close'], window=MA_PERIOD).sma_indicator().iloc[-1])
 
             rs = float(rs_dict.get(t, np.nan))
             if np.isnan(rs):
@@ -190,11 +213,8 @@ def run_scan():
                 continue
 
             cons, brk, hi_c, lo_c = check_consolidation_and_breakout(
-                df,
-                lookback=CONS_LOOKBACK,
-                max_range_pct=MAX_RANGE_PCT,
-                require_triangle=REQUIRE_LOWER_HIGHS_HIGHER_LOWS,
-                breakout_buffer_pct=BREAKOUT_BUFFER_PCT
+                df, lookback=15, max_range_pct=12.0,
+                require_triangle=True, breakout_buffer_pct=0.3
             )
             dist_ma_pct = (price - ma) / ma * 100.0
             signal = "Breakout" if brk else ("Consolidation" if cons else "")
@@ -228,7 +248,7 @@ def run_scan():
 
 def send_results_to_telegram(results):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Missing TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID env vars; skipping Telegram.")
+        print("Missing TELEGRAM_* env vars; skipping Telegram.")
         return
     if results is None or results.empty:
         send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
