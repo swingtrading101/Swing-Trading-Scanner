@@ -1,9 +1,9 @@
 name: Swing Scanner
 
 on:
-  workflow_dispatch:        # allow manual runs from the Actions tab
+  workflow_dispatch:    # allow manual runs
   schedule:
-    - cron: "30 13 * * 1-5" # 13:30 UTC = 9:30 AM ET, Mon–Fri
+    - cron: "30 13 * * 1-5"   # 13:30 UTC (~9:30 AM ET), Mon–Fri
 
 jobs:
   scan:
@@ -11,12 +11,12 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: "3.10"
 
       - name: Install dependencies
         run: |
@@ -26,15 +26,16 @@ jobs:
       - name: Run Swing Scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-          # Prefilter knobs for ALL_US; tweak without changing code
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Prefilter knobs (tune without editing code)
           PREFILTER_MIN_PRICE: "3"
           PREFILTER_MIN_AVG_VOL: "5000000"
-          MAX_TICKERS_PER_RUN: "1500"
+          PREFILTER_TOP_N_BY_VOL: "1500"
+          # Universe choice (optional override)
+          UNIVERSE: "ALL_US"
         run: |
           python swing_scanner.py
 
-      # (optional) Save CSV from each run as an artifact you can download
       - name: Upload CSV artifact
         if: always()
         uses: actions/upload-artifact@v4
