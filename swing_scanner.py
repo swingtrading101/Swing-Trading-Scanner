@@ -8,7 +8,10 @@ Original file is located at
 """
 
 # Install deps (run once per new runtime)
-!pip -q install yfinance pandas numpy ta scipy
+
+import os
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
 
 import pandas as pd
 import numpy as np
@@ -338,3 +341,5 @@ ts = datetime.now().strftime("%Y%m%d_%H%M")
 worksheet = sh.add_worksheet(title=ts, rows="1000", cols="20")
 set_with_dataframe(worksheet, results.reset_index(drop=True))
 print(f"Wrote {len(results)} rows to Google Sheet: {sheet_name} / {ts}")
+if __name__ == "__main__":
+    main()
