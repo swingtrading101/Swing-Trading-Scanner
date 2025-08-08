@@ -23,7 +23,8 @@ from scipy.stats import linregress
 pd.options.display.float_format = '{:,.2f}'.format
 
 # ========= CONFIG =========
-UNIVERSE = os.getenv("UNIVERSE", "S&P500")   # "S&P500" or "Custom List"
+UNIVERSE = os.getenv("UNIVERSE", "ALL_US")
+   # "S&P500" or "Custom List"
 CUSTOM_TICKERS = os.getenv("CUSTOM_TICKERS", "")  # CSV, e.g. "AAPL,MSFT,NVDA"
 
 LOOKBACK_MONTHS_RS = int(os.getenv("LOOKBACK_MONTHS_RS", "6"))
@@ -45,17 +46,22 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # ========= CORE HELPERS =========
+from yahoo_fin import stock_info as si
+
 def get_universe(universe="S&P500", custom_list=None):
     if universe == "S&P500":
         tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
         tickers = tables[0]["Symbol"].tolist()
         tickers = [t.replace('.', '-') for t in tickers]
-        return sorted(list(set(tickers)))
+    elif universe == "ALL_US":
+        tickers = si.tickers_nasdaq() + si.tickers_other()
+        tickers = [t for t in tickers if t.isalpha()]  # filter out weird tickers
     elif universe == "Custom List":
-        if custom_list:
-            return [t.strip().upper() for t in custom_list.split(",") if t.strip()]
-        return []
-    return []
+        return [t.strip().upper() for t in (custom_list or "").split(",") if t.strip()]
+    else:
+        tickers = []
+    return sorted(list(set(tickers)))
+
 
 def compute_adr(df, period=14):
     dr = df['High'] - df['Low']
