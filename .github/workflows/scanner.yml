@@ -1,14 +1,13 @@
 name: Swing Scanner
 
 on:
-  workflow_dispatch:    # allow manual runs
+  workflow_dispatch:
   schedule:
-    - cron: "30 13 * * 1-5"   # 13:30 UTC (~9:30 AM ET), Mon–Fri
+    - cron: "30 13 * * 1-5"    # 13:30 UTC (~9:30 AM ET) Mon–Fri
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -23,16 +22,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install yfinance pandas numpy ta scipy requests yahoo_fin lxml
 
-      - name: Run Swing Scanner
+      - name: Run Swing Scanner (pre‑breakout watchlist)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # Prefilter knobs (tune without editing code)
+          UNIVERSE: "ALL_US"
+          # Speed knobs
           PREFILTER_MIN_PRICE: "3"
           PREFILTER_MIN_AVG_VOL: "5000000"
           PREFILTER_TOP_N_BY_VOL: "1500"
-          # Universe choice (optional override)
-          UNIVERSE: "ALL_US"
+          # Pre‑breakout tuning
+          PROX_TO_BREAKOUT_PCT: "2.0"      # ≤2% under trigger
+          MAX_DIST_SMA_PCT: "12"           # exclude extended
+          MIN_DIST_SMA_PCT: "-3"
+          ADR_CONTRACTION_RATIO: "0.85"
         run: |
           python swing_scanner.py
 
@@ -40,5 +43,5 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: swing-scanner-results
+          name: swing-watchlist-results
           path: "*.csv"
