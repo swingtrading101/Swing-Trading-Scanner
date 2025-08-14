@@ -1,12 +1,13 @@
-name: Swing Scanner
+name: Pre-Market ALL-US Screen
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:    # allow manual runs
   schedule:
-    - cron: "30 13 * * 1-5"   # 13:30 UTC (~9:30 AM ET) Mon–Fri
+    # Pre-market: ~9:10 AM US Eastern (13:10 UTC) Mon–Fri
+    - cron: "10 13 * * 1-5"
 
 jobs:
-  scan:
+  run-screen:
     runs-on: ubuntu-latest
 
     steps:
@@ -21,40 +22,90 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install yfinance pandas numpy ta scipy requests yahoo_fin lxml
+          pip install yfinance pandas numpy ta scipy yahoo_fin lxml requests
 
-      - name: Run Swing Scanner (pre‑breakout + preview)
+      # >>> If your script filename is different, change it here:
+      - name: Run ALL-US pre-market screen
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          UNIVERSE: "ALL_US"
+          # ------- Tuning knobs (optional) -------
+          ADR_PERIOD: "14"
+          MA_PERIOD: "22"
+          AVG_VOL_LOOKBACK: "30"
+          RS_LOOKBACK_MONTHS: "6"
 
-          # Speed knobs
-          PREFILTER_MIN_PRICE: "3"
-          PREFILTER_MIN_AVG_VOL: "6000000"
-          PREFILTER_TOP_N_BY_VOL: "1200"
-
-          # Core gates
+          # Hard filter thresholds
           MIN_ADR_PCT: "5"
-          MIN_AVG_VOL_30D: "25000000"
-          MIN_RS_PCTILE: "0.97"
-          REQUIRE_ABOVE_SMA: "1"
+          MIN_AVG_VOL_30D: "30000000"
+          MIN_PRICE: "1.0"
+          MIN_RS_PCTILE: "0.98"
 
-          # Pre‑breakout tuning
-          PROX_TO_BREAKOUT_PCT: "3.0"
-          MAX_DIST_SMA_PCT: "12"
-          MIN_DIST_SMA_PCT: "-4"
-          ADR_CONTRACTION_RATIO: "0.9"
+          # Universe speed knobs
+          PREFILTER_MIN_PRICE: "3.0"
+          PREFILTER_MIN_AVG_VOL5: "5000000"
+          PREFILTER_TOP_N_BY_VOL: "1500"
 
-          # Preview watchlist (near‑misses)
-          PREVIEW_WATCHLIST: "1"
-          PREVIEW_TOP_K: "10"
+          # Use premarket/real-time price if available
+          USE_PREMARKET_PRICE: "1"
         run: |
-          python swing_scanner.py
+          python premarket_screen.py
 
-      - name: Upload CSV artifact(s)
+      - name: Upload CSV artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: swing-watchlists
-          path: "*.csv"
+          name: premarket-screen-results
+          path: |
+            allus_premarket_screen_*.csv
+
+      - name: Send Telegram summary
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import os, glob, pandas as pd, requests, math
+
+          token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+          chat  = os.getenv("TELEGRAM_CHAT_ID", "")
+          if not token or not chat:
+              print("No TELEGRAM_* secrets; skipping Telegram.")
+              raise SystemExit(0)
+
+          files = sorted(glob.glob("allus_premarket_screen_*.csv"))
+          if not files:
+              msg = "📭 No CSV produced by the pre‑market screen."
+              requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                            data={"chat_id": chat, "text": msg})
+              raise SystemExit(0)
+
+          df = pd.read_csv(files[-1])
+          if df.empty:
+              msg = "📭 No tickers passed the pre‑market screen today."
+              requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                            data={"chat_id": chat, "text": msg})
+              raise SystemExit(0)
+
+          # Build compact message (limit to top 15 for Telegram length)
+          top = df.head(15).copy()
+          def fmt_vol(v): 
+              try: return f"{float(v)/1e6:.1f}M"
+              except: return str(v)
+
+          lines = ["<b>📣 Pre‑Market Screen (Top)</b>"]
+          for _, r in top.iterrows():
+              price = float(r["Price"])
+              adr   = float(r["ADR%"])
+              rs    = float(r["RS_pctile"])
+              dist  = float(r.get("Dist_22SMA_%", 0.0))
+              vol   = fmt_vol(r["AvgVol(30d)"])
+              lines.append(f"{r['Ticker']}: ${price:.2f} | ADR {adr:.2f}% | Vol {vol} | RS {rs:.2f} | Dist22SMA {dist:.2f}%")
+
+          msg = "\n".join(lines)
+          r = requests.post(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              data={"chat_id": chat, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True},
+              timeout=15
+          )
+          print("Telegram sent." if r.ok else f"Telegram failed: {r.text}")
+          PY
