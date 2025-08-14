@@ -1,9 +1,8 @@
 name: Pre-Market ALL-US Screen
 
 on:
-  workflow_dispatch:        # manual runs
+  workflow_dispatch:
   schedule:
-    # ~9:10 AM US Eastern (13:10 UTC) Mon–Fri
     - cron: "10 13 * * 1-5"
 
 jobs:
@@ -24,41 +23,36 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install dependencies (pin websockets BEFORE yfinance)
+      - name: Install dependencies (force websockets last)
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install "websockets==11.0.3"
-          pip install "yfinance==0.2.40" pandas numpy ta requests
+          # Install everything else first (will downgrade websockets)
           pip install yahoo_fin beautifulsoup4 html5lib lxml
-          # verify the problematic import path
+          pip install "yfinance==0.2.40" pandas numpy ta requests
+          # Now force the correct version last
+          pip install --upgrade --force-reinstall "websockets==11.0.3"
+          # Verify
           python - <<'PY'
           import websockets, yfinance
           print("websockets:", websockets.__version__)
           print("yfinance:", yfinance.__version__)
-          from websockets.sync.client import connect  # must succeed
+          from websockets.sync.client import connect
           print("websockets.sync import OK ✓")
           PY
 
       - name: Run ALL-US pre-market screen (swing_scanner.py)
         env:
-          # ------- Screening knobs -------
           ADR_PERIOD: "14"
           MA_PERIOD: "22"
           AVG_VOL_LOOKBACK: "30"
           RS_LOOKBACK_MONTHS: "6"
-
-          # Hard filter thresholds
           MIN_ADR_PCT: "5"
           MIN_AVG_VOL_30D: "30000000"
           MIN_PRICE: "1.0"
           MIN_RS_PCTILE: "0.98"
-
-          # Universe speed knobs
           PREFILTER_MIN_PRICE: "3.0"
           PREFILTER_MIN_AVG_VOL5: "5000000"
           PREFILTER_TOP_N_BY_VOL: "1200"
-
-          # Telegram (repo secrets)
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
