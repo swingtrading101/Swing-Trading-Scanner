@@ -1,7 +1,7 @@
 name: Pre-Market ALL-US Screen
 
 on:
-  workflow_dispatch:        # allow manual runs from Actions tab
+  workflow_dispatch:        # manual runs
   schedule:
     # ~9:10 AM US Eastern (13:10 UTC) Mon–Fri
     - cron: "10 13 * * 1-5"
@@ -29,12 +29,12 @@ jobs:
           python -m pip install --upgrade pip
           # Core libs
           pip install yfinance pandas numpy ta scipy requests
-          # yahoo_fin + parsers explicitly
+          # yahoo_fin + HTML parsers explicitly (prevents import errors)
           pip install yahoo_fin beautifulsoup4 html5lib lxml
 
       - name: Run ALL-US pre-market screen (swing_scanner.py)
         env:
-          # ------- Tuning knobs (optional) -------
+          # ------- Screening knobs -------
           ADR_PERIOD: "14"
           MA_PERIOD: "22"
           AVG_VOL_LOOKBACK: "30"
@@ -54,13 +54,12 @@ jobs:
           # Use premarket/real-time price if available
           USE_PREMARKET_PRICE: "1"
 
-          # Telegram secrets (add in repo Settings → Secrets and variables → Actions)
+          # Telegram (add these as repo secrets)
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           if [ ! -f "swing_scanner.py" ]; then
-            echo "::error ::Cannot find swing_scanner.py at repo root."
-            ls -la
+            echo "::error ::swing_scanner.py not found at repo root. Move it here or change the path in this step."
             exit 1
           fi
           python swing_scanner.py
