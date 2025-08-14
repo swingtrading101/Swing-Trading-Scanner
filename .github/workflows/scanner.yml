@@ -26,13 +26,13 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip setuptools wheel
+          # Install websockets first so yfinance can import its live module safely
+          pip install "websockets==11.0.3"
           # Core libs
-          pip install "yfinance>=0.2.40" pandas numpy ta scipy requests
+          pip install "yfinance>=0.2.40" pandas numpy ta requests
           # yahoo_fin + HTML parsers
           pip install yahoo_fin beautifulsoup4 html5lib lxml
-          # FIX: yfinance expects websockets.sync (v10.4+)
-          pip install "websockets>=10.4"
 
       - name: Run ALL-US pre-market screen (swing_scanner.py)
         env:
@@ -53,9 +53,6 @@ jobs:
           PREFILTER_MIN_AVG_VOL5: "5000000"
           PREFILTER_TOP_N_BY_VOL: "1200"
 
-          # Use premarket/real-time price if available
-          USE_PREMARKET_PRICE: "1"
-
           # Telegram (repo secrets)
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -65,6 +62,10 @@ jobs:
             exit 1
           fi
           python swing_scanner.py
+
+      - name: List files (debug)
+        if: always()
+        run: ls -la
 
       - name: Upload CSV artifact
         if: always()
