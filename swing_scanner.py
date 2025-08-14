@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Swing Scanner — PRE‑BREAKOUT WATCHLIST with Preview (CI‑ready)
+Swing Scanner — PRE‑BREAKOUT WATCHLIST with Preview (CI‑ready, no breakouts)
 
 Finds liquid, high‑RS US stocks that are:
   • ADR(14) >= MIN_ADR_PCT (default 5%)
@@ -9,7 +9,7 @@ Finds liquid, high‑RS US stocks that are:
   • RS percentile >= MIN_RS_PCTILE (default top 2% = 0.98)
   • In a tightening consolidation (higher lows + lower highs)
   • NOT yet broken out; within PROX_TO_BREAKOUT_PCT% below trigger
-If none pass, sends a **Preview Watchlist**: top K near‑misses closest to breakout.
+If none pass, sends a **Preview Watchlist**: top K near‑misses (still below trigger).
 
 Outputs: Telegram summary + CSV artifact(s).
 Deps: yfinance pandas numpy ta scipy requests yahoo_fin lxml
@@ -113,7 +113,7 @@ def check_consolidation_and_breakout(df, lookback=15, max_range_pct=12.0,
                                      require_triangle=True):
     """
     Returns: cons(bool), brk(bool), hi_recent, lo_recent, breakout_level, range_pct
-      cons = tightening (higher lows + lower highs) and range% <= max_range_pct
+      cons = tightening (higher lows + lower highs) AND range% <= max_range_pct
       brk  = price > breakout_level (0.3% buffer)
     """
     if len(df) < lookback + 2:
@@ -187,7 +187,7 @@ def cap_by_recent_volume(tickers, top_n=1500):
     scored.sort(key=lambda x: x[1], reverse=True)
     return [t for t, _ in scored[:top_n]]
 
-# ========= SCAN (pre‑breakout only; collect near‑misses) =========
+# ========= SCAN (pre‑breakout only; collect near‑misses but NEVER breakouts) =========
 def run_scan():
     tickers = get_universe(UNIVERSE, CUSTOM_TICKERS)
     print(f"Universe size (raw): {len(tickers)}")
@@ -201,7 +201,7 @@ def run_scan():
     rs_dict = rs_percentile(tickers, months=LOOKBACK_MONTHS_RS, benchmark='SPY').to_dict()
 
     candidates = []
-    near_miss = []  # collect almost-there with metrics
+    near_miss = []  # collect almost-there (but still below breakout)
     skips = {"empty":0, "short":0, "price":0, "filters":0}
 
     for t in tickers:
@@ -241,20 +241,37 @@ def run_scan():
                 df, lookback=15, max_range_pct=12.0, require_triangle=True
             )
 
+            # hard exclude anything that's already broken out (for both strict and preview)
+            if brk:
+                skips["filters"] += 1
+                continue
+
             dist_ma_pct = (price - ma) / max(ma, 1e-9) * 100.0
             prox_to_breakout = ((breakout_level - price) / breakout_level * 100.0) if np.isfinite(breakout_level) else np.nan
             adr_contraction_ok = (pd.notna(adr50) and float(adr14 / max(adr50, 1e-9)) <= ADR_CONTRACTION_RATIO)
 
-            # Decide pass/fail for pre-breakout watchlist
+            # STRICT pre-breakout pass
             passes = (
-                cons and (not brk) and
+                cons and
                 (MIN_DIST_SMA_PCT <= dist_ma_pct <= MAX_DIST_SMA_PCT) and
                 (0.0 <= prox_to_breakout <= PROX_TO_BREAKOUT_PCT) and
                 adr_contraction_ok
             )
 
-            # Collect near-misses with metrics (to rank later if needed)
-            if not passes:
+            if passes:
+                candidates.append({
+                    "Ticker": t,
+                    "Price": round(price, 2),
+                    "ADR%": round(adr_pct, 2),
+                    "AvgVol(30d)": int(avg_vol),
+                    "RS_pctile": round(rs, 4),
+                    f"Dist_{MA_PERIOD}SMA_%": round(dist_ma_pct, 2),
+                    "BaseRange%": round(base_range, 2) if np.isfinite(base_range) else np.nan,
+                    "Prox2BO%": round(prox_to_breakout, 2) if np.isfinite(prox_to_breakout) else np.nan,
+                    "Signal": "Watch"
+                })
+            else:
+                # Only collect near-miss if STILL under breakout (brk==False) — enforced above
                 near_miss.append({
                     "Ticker": t,
                     "Price": round(price, 2),
@@ -264,24 +281,9 @@ def run_scan():
                     f"Dist_{MA_PERIOD}SMA_%": round(dist_ma_pct, 2),
                     "BaseRange%": round(base_range, 2) if np.isfinite(base_range) else np.nan,
                     "Prox2BO%": round(prox_to_breakout, 2) if np.isfinite(prox_to_breakout) else np.nan,
-                    "cons": bool(cons), "brk": bool(brk),
+                    "cons": bool(cons),
                     "adr_contr": bool(adr_contraction_ok),
                 })
-                skips["filters"] += 1
-                continue
-
-            # If passes, add to candidates
-            candidates.append({
-                "Ticker": t,
-                "Price": round(price, 2),
-                "ADR%": round(adr_pct, 2),
-                "AvgVol(30d)": int(avg_vol),
-                "RS_pctile": round(rs, 4),
-                f"Dist_{MA_PERIOD}SMA_%": round(dist_ma_pct, 2),
-                "BaseRange%": round(base_range, 2),
-                "Prox2BO%": round(prox_to_breakout, 2),
-                "Signal": "Watch"
-            })
 
         except Exception as e:
             print(f"[calc error] {t}: {type(e).__name__}: {e}")
@@ -290,9 +292,8 @@ def run_scan():
     preview = pd.DataFrame()
 
     if results.empty and PREVIEW_WATCHLIST and len(near_miss) > 0:
-        # Rank near-misses by "closest to breakout" then RS, then ADR (prefer viable liquid names)
         preview = pd.DataFrame(near_miss)
-        # Prox2BO% can be NaN; we want smallest positive (closest under breakout)
+        # Only keep those with a valid positive proximity (UNDER the trigger)
         preview["Prox2BO%"] = pd.to_numeric(preview["Prox2BO%"], errors="coerce")
         preview = preview[preview["Prox2BO%"].notna() & (preview["Prox2BO%"] >= 0)]
         if not preview.empty:
@@ -310,7 +311,7 @@ def run_scan():
     else:
         print("No strict pre‑breakout matches today.")
         if not preview.empty:
-            print("\nPreview Watchlist (near‑misses, closest to breakout):")
+            print("\nPreview Watchlist (near‑misses, still below trigger):")
             print(preview.to_string(index=False))
     print("Skipped counts:", skips)
 
