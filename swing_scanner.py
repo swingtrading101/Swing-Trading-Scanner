@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-ALL‑US Pre‑Market Screen (with Telegram + CSV)
+ALL‑US Pre‑Market Screen (with CSV + optional Telegram)
+
 Criteria:
   • ADR(14) > 5%
   • 30‑day avg volume > 30,000,000 shares
@@ -8,13 +9,15 @@ Criteria:
   • RS (6 months) in top 2% vs SPY
   • Above 22‑day SMA
 
-Outputs: printed top rows, Telegram summary, and CSV (always).
+Outputs:
+  • Prints a ranked table (top rows)
+  • Saves CSV (always), e.g. allus_premarket_screen_YYYYMMDD_HHMM.csv
+  • Sends Telegram summary if TELEGRAM_* are provided
+
 Deps: yfinance pandas numpy ta scipy yahoo_fin lxml beautifulsoup4 html5lib requests
 """
 
 import os
-import glob
-import math
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -22,37 +25,40 @@ import requests
 from ta.trend import SMAIndicator
 from yahoo_fin import stock_info as si
 
-# ---------------- CONFIG (override via env) ----------------
+# ---------- CONFIG (env overrides supported) ----------
 ADR_PERIOD = int(os.getenv("ADR_PERIOD", "14"))
 MA_PERIOD = int(os.getenv("MA_PERIOD", "22"))
 AVG_VOL_LOOKBACK = int(os.getenv("AVG_VOL_LOOKBACK", "30"))
 RS_LOOKBACK_MONTHS = int(os.getenv("RS_LOOKBACK_MONTHS", "6"))
 
-# Hard filter thresholds for this screen
+# Hard filters (your screen)
 MIN_ADR_PCT = float(os.getenv("MIN_ADR_PCT", "5"))
 MIN_AVG_VOL_30D = float(os.getenv("MIN_AVG_VOL_30D", "30000000"))
 MIN_PRICE = float(os.getenv("MIN_PRICE", "1.0"))
 MIN_RS_PCTILE = float(os.getenv("MIN_RS_PCTILE", "0.98"))  # top 2%
 
-# Universe speed knobs
-PREFILTER_MIN_PRICE = float(os.getenv("PREFILTER_MIN_PRICE", "3.0"))       # quick pass using recent data
+# Universe speed knobs (helpful for ALL_US)
+PREFILTER_MIN_PRICE = float(os.getenv("PREFILTER_MIN_PRICE", "3.0"))
 PREFILTER_MIN_AVG_VOL5 = float(os.getenv("PREFILTER_MIN_AVG_VOL5", "5000000"))
 PREFILTER_TOP_N_BY_VOL = int(os.getenv("PREFILTER_TOP_N_BY_VOL", "1200"))
 
-# Use premarket/real-time price if available via fast_info (fallback to last close)
+# Use premarket/real-time price if available via fast_info
 USE_PREMARKET_PRICE = os.getenv("USE_PREMARKET_PRICE", "1") == "1"
 
-# Telegram (set in GitHub Secrets)
+# Optional Telegram (set via GitHub Secrets in Actions)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 pd.options.display.float_format = "{:,.2f}".format
 
 
-# ---------------- Helpers ----------------
+# ---------- Helpers ----------
 def get_all_us_tickers():
-    tickers = si.tickers_nasdaq() + si.tickers_other()
-    # Keep only plain alphabetic symbols (drop weird/ETF-like tickers with punctuation)
+    """NASDAQ + other (NYSE/AMEX). Filters to alphabetic tickers only."""
+    try:
+        tickers = si.tickers_nasdaq() + si.tickers_other()
+    except Exception:
+        tickers = []
     return sorted({t for t in tickers if t.isalpha()})
 
 
@@ -67,7 +73,7 @@ def safe_download_daily(ticker, period="6mo"):
 
 
 def recent_price_fast(ticker, fallback_close):
-    """Try premarket/real-time price via fast_info; fall back to last close."""
+    """Try pre‑market/real‑time price via fast_info; fallback to last close."""
     if not USE_PREMARKET_PRICE:
         return float(fallback_close)
     try:
@@ -93,9 +99,12 @@ def compute_adr_pct(df, period=14, ref_price=None):
 
 
 def prefilter_universe(tickers, min_price=3.0, min_avg_vol5=5_000_000, cap=1200):
-    """Lightweight 7-day check to keep only liquid candidates; then cap by recent volume."""
+    """
+    Lightweight 7‑day screen to remove illiquid names, then keep top N by recent vol.
+    This massively speeds up ALL_US scanning while retaining likely candidates.
+    """
     kept = []
-    vols = []
+    scores = []
     for t in tickers:
         try:
             d = yf.download(t, period="7d", interval="1d", progress=False)
@@ -105,21 +114,25 @@ def prefilter_universe(tickers, min_price=3.0, min_avg_vol5=5_000_000, cap=1200)
             v5 = float(d["Volume"].tail(5).mean())
             if px >= min_price and v5 >= min_avg_vol5:
                 kept.append(t)
-                vols.append((t, v5))
+                scores.append((t, v5))
         except Exception:
             pass
-    vols.sort(key=lambda x: x[1], reverse=True)
-    top = [t for t, _ in vols[:cap]]
-    return top
+    scores.sort(key=lambda x: x[1], reverse=True)
+    return [t for t, _ in scores[:cap]]
 
 
 def rs_percentile(tickers, months=6, benchmark="SPY"):
-    """Relative strength vs SPY over ~months window using adjusted closes."""
+    """
+    Relative strength vs SPY over ~months.
+    Uses adjusted closes and aligns dates to avoid label mismatch errors.
+    Returns Series of 0..1 pct ranks keyed by ticker.
+    """
     try:
         bench = yf.download(benchmark, period=f"{months*32}d", interval="1d",
                             auto_adjust=True, progress=False)["Close"].dropna()
     except Exception:
         bench = pd.Series(dtype=float)
+
     out = {}
     for t in tickers:
         try:
@@ -137,10 +150,12 @@ def rs_percentile(tickers, months=6, benchmark="SPY"):
             out[t] = r_stock - r_bench
         except Exception:
             pass
+
     return pd.Series(out).rank(pct=True)  # 0..1
 
 
 def send_telegram(text: str) -> bool:
+    """Send a Telegram message if secrets are available; return True/False."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return False
     try:
@@ -159,7 +174,7 @@ def send_telegram(text: str) -> bool:
         return False
 
 
-# ---------------- Main scan ----------------
+# ---------- Main scan ----------
 def run_screen():
     print("Building ALL_US universe...")
     all_us = get_all_us_tickers()
@@ -170,7 +185,7 @@ def run_screen():
         all_us,
         min_price=PREFILTER_MIN_PRICE,
         min_avg_vol5=PREFILTER_MIN_AVG_VOL5,
-        cap=PREFILTER_TOP_N_BY_VOL
+        cap=PREFILTER_TOP_N_BY_VOL,
     )
     print(f"Universe after prefilter+cap: {len(universe)}")
 
@@ -216,39 +231,40 @@ def run_screen():
                 "ADR%": round(adr_pct, 2),
                 "AvgVol(30d)": int(avg_vol_30d),
                 "RS_pctile": round(rs_val, 4),
-                "Dist_22SMA_%": round((price_now - ma22) / max(ma22, 1e-9) * 100.0, 2)
+                "Dist_22SMA_%": round((price_now - ma22) / max(ma22, 1e-9) * 100.0, 2),
             })
         except Exception:
+            # Skip noisy tickers; continue loop
             continue
 
     results = pd.DataFrame(rows)
 
-    # Always save a CSV (even if empty) so workflow steps can find it
+    # Always save CSV (even if empty) for downstream steps/artifacts
     ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M")
-    fn = f"allus_premarket_screen_{ts}.csv"
-    results.to_csv(fn, index=False)
+    csv_name = f"allus_premarket_screen_{ts}.csv"
+    results.to_csv(csv_name, index=False)
 
     if results.empty:
-        print("No tickers passed the pre-market screen today.")
-        print(f"Saved empty results to {fn}")
-        return results, fn
+        print("No tickers passed the pre‑market screen today.")
+        print(f"Saved empty results to {csv_name}")
+        return results, csv_name
 
     results = results.sort_values(
         ["RS_pctile", "ADR%", "AvgVol(30d)"],
         ascending=[False, False, False]
     ).reset_index(drop=True)
 
-    print("\nPre-Market Screen (top 50):")
+    print("\nPre‑Market Screen (top 50):")
     print(results.head(50).to_string(index=False))
-    print(f"\nSaved {len(results)} results to {fn}")
-    return results, fn
+    print(f"\nSaved {len(results)} results to {csv_name}")
+    return results, csv_name
 
 
-def send_summary_telegram(results: pd.DataFrame):
+def send_summary(results: pd.DataFrame):
+    """Send a compact summary to Telegram (top 15)."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram secrets not set; skipping Telegram.")
         return
-
     if results.empty:
         send_telegram("📭 No tickers passed the pre‑market screen today.")
         return
@@ -273,6 +289,10 @@ def send_summary_telegram(results: pd.DataFrame):
     print("Telegram sent." if ok else "Telegram failed.")
 
 
+def main():
+    results, _ = run_screen()
+    send_summary(results)
+
+
 if __name__ == "__main__":
-    results, csv_path = run_screen()
-    send_summary_telegram(results)
+    main()
