@@ -24,15 +24,20 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install dependencies
+      - name: Install dependencies (pin websockets BEFORE yfinance)
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          # Install websockets first so yfinance can import its live module safely
           pip install "websockets==11.0.3"
-          # Core libs
-          pip install "yfinance>=0.2.40" pandas numpy ta requests
-          # yahoo_fin + HTML parsers
+          pip install "yfinance==0.2.40" pandas numpy ta requests
           pip install yahoo_fin beautifulsoup4 html5lib lxml
+          # verify the problematic import path
+          python - <<'PY'
+          import websockets, yfinance
+          print("websockets:", websockets.__version__)
+          print("yfinance:", yfinance.__version__)
+          from websockets.sync.client import connect  # must succeed
+          print("websockets.sync import OK ✓")
+          PY
 
       - name: Run ALL-US pre-market screen (swing_scanner.py)
         env:
