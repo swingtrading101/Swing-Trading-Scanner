@@ -1,9 +1,9 @@
 name: Pre-Market ALL-US Screen
 
 on:
-  workflow_dispatch:    # allow manual runs
+  workflow_dispatch:        # allow manual runs from Actions tab
   schedule:
-    # Pre-market: ~9:10 AM US Eastern (13:10 UTC) Mon–Fri
+    # ~9:10 AM US Eastern (13:10 UTC) Mon–Fri
     - cron: "10 13 * * 1-5"
 
 jobs:
@@ -14,6 +14,11 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v3
 
+      - name: Show repo contents (debug)
+        run: |
+          echo "PWD: $(pwd)"
+          ls -la
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -22,10 +27,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install yfinance pandas numpy ta scipy yahoo_fin lxml requests
+          # Core libs
+          pip install yfinance pandas numpy ta scipy requests
+          # yahoo_fin + parsers explicitly
+          pip install yahoo_fin beautifulsoup4 html5lib lxml
 
-      # >>> If your script filename is different, change it here:
-      - name: Run ALL-US pre-market screen
+      - name: Run ALL-US pre-market screen (swing_scanner.py)
         env:
           # ------- Tuning knobs (optional) -------
           ADR_PERIOD: "14"
@@ -42,70 +49,25 @@ jobs:
           # Universe speed knobs
           PREFILTER_MIN_PRICE: "3.0"
           PREFILTER_MIN_AVG_VOL5: "5000000"
-          PREFILTER_TOP_N_BY_VOL: "1500"
+          PREFILTER_TOP_N_BY_VOL: "1200"
 
           # Use premarket/real-time price if available
           USE_PREMARKET_PRICE: "1"
+
+          # Telegram secrets (add in repo Settings → Secrets and variables → Actions)
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python premarket_screen.py
+          if [ ! -f "swing_scanner.py" ]; then
+            echo "::error ::Cannot find swing_scanner.py at repo root."
+            ls -la
+            exit 1
+          fi
+          python swing_scanner.py
 
       - name: Upload CSV artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: premarket-screen-results
-          path: |
-            allus_premarket_screen_*.csv
-
-      - name: Send Telegram summary
-        if: always()
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python - <<'PY'
-          import os, glob, pandas as pd, requests, math
-
-          token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-          chat  = os.getenv("TELEGRAM_CHAT_ID", "")
-          if not token or not chat:
-              print("No TELEGRAM_* secrets; skipping Telegram.")
-              raise SystemExit(0)
-
-          files = sorted(glob.glob("allus_premarket_screen_*.csv"))
-          if not files:
-              msg = "📭 No CSV produced by the pre‑market screen."
-              requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                            data={"chat_id": chat, "text": msg})
-              raise SystemExit(0)
-
-          df = pd.read_csv(files[-1])
-          if df.empty:
-              msg = "📭 No tickers passed the pre‑market screen today."
-              requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                            data={"chat_id": chat, "text": msg})
-              raise SystemExit(0)
-
-          # Build compact message (limit to top 15 for Telegram length)
-          top = df.head(15).copy()
-          def fmt_vol(v): 
-              try: return f"{float(v)/1e6:.1f}M"
-              except: return str(v)
-
-          lines = ["<b>📣 Pre‑Market Screen (Top)</b>"]
-          for _, r in top.iterrows():
-              price = float(r["Price"])
-              adr   = float(r["ADR%"])
-              rs    = float(r["RS_pctile"])
-              dist  = float(r.get("Dist_22SMA_%", 0.0))
-              vol   = fmt_vol(r["AvgVol(30d)"])
-              lines.append(f"{r['Ticker']}: ${price:.2f} | ADR {adr:.2f}% | Vol {vol} | RS {rs:.2f} | Dist22SMA {dist:.2f}%")
-
-          msg = "\n".join(lines)
-          r = requests.post(
-              f"https://api.telegram.org/bot{token}/sendMessage",
-              data={"chat_id": chat, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True},
-              timeout=15
-          )
-          print("Telegram sent." if r.ok else f"Telegram failed: {r.text}")
-          PY
+          path: allus_premarket_screen_*.csv
