@@ -1,9 +1,11 @@
-name: Pre-Market ALL-US Screen
+name: After-Hours Gap Scan
 
 on:
+  # Run manually if you want
   workflow_dispatch:
+  # Weekdays at 21:10 UTC ≈ 4:10 PM US Eastern (after regular close)
   schedule:
-    - cron: "10 13 * * 1-5"
+    - cron: "10 21 * * 1-5"
 
 jobs:
   run-screen:
@@ -23,38 +25,32 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install dependencies (force websockets last)
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          # Install everything else first (will downgrade websockets)
           pip install yahoo_fin beautifulsoup4 html5lib lxml
-          pip install "yfinance==0.2.40" pandas numpy ta requests
-          # Now force the correct version last
-          pip install --upgrade --force-reinstall "websockets==11.0.3"
-          # Verify
-          python - <<'PY'
-          import websockets, yfinance
-          print("websockets:", websockets.__version__)
-          print("yfinance:", yfinance.__version__)
-          from websockets.sync.client import connect
-          print("websockets.sync import OK ✓")
-          PY
+          pip install "yfinance==0.2.40" pandas numpy requests
 
-      - name: Run ALL-US pre-market screen (swing_scanner.py)
+      - name: Run after-hours gap scan (swing_scanner.py)
         env:
-          ADR_PERIOD: "14"
-          MA_PERIOD: "22"
-          AVG_VOL_LOOKBACK: "30"
-          RS_LOOKBACK_MONTHS: "6"
-          MIN_ADR_PCT: "5"
-          MIN_AVG_VOL_30D: "30000000"
-          MIN_PRICE: "1.0"
-          MIN_RS_PCTILE: "0.98"
-          PREFILTER_MIN_PRICE: "3.0"
-          PREFILTER_MIN_AVG_VOL5: "5000000"
+          # --- Universe prefilter (keeps runtime reasonable) ---
+          PREFILTER_MIN_PRICE: "0.75"
+          PREFILTER_MIN_AVG_VOL5: "150000"
           PREFILTER_TOP_N_BY_VOL: "1200"
+
+          # --- Core after-hours / next-day gap model params ---
+          AH_MIN_PRICE: "0.75"
+          AH_MAX_PRICE: "20.0"
+          AH_MIN_MC: "20000000"         # 20M
+          AH_MAX_MC: "750000000"        # 750M
+          AH_MIN_REG_VOL: "300000"      # last-day volume
+          AH_MIN_AVG_VOL_20D: "200000"  # 20d avg volume
+          AH_MIN_AH_PCT: "2.0"          # min after-hours % move
+          AH_MIN_RVOL: "1.5"            # min relative volume
+
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+
         run: |
           if [ ! -f "swing_scanner.py" ]; then
             echo "::error ::swing_scanner.py not found at repo root."
@@ -70,5 +66,5 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: premarket-screen-results
-          path: allus_premarket_screen_*.csv
+          name: afterhours-gap-scan-results
+          path: afterhours_gap_scan_*.csv
