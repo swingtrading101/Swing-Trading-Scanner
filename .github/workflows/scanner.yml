@@ -1,7 +1,9 @@
 name: Pre-Market Breakout Screen v2
 
 on:
+  # allows you to click "Run workflow" in the Actions tab
   workflow_dispatch:
+  # optional: run automatically on weekdays at 13:10 UTC (adjust if you want)
   schedule:
     - cron: "10 13 * * 1-5"
 
@@ -23,12 +25,20 @@ jobs:
         with:
           python-version: "3.11"
 
-            - name: Run v2 pre-market breakout screen (swing_scanner_v2.py)
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          # core deps used by swing_scanner_v2.py
+          pip install pandas numpy requests ta
+
+      - name: Run v2 pre-market breakout screen (swing_scanner_v2.py)
         env:
+          # --- API & bot secrets (must be set in repo Settings > Secrets) ---
           POLYGON_API_KEY:       ${{ secrets.POLYGON_API_KEY }}
           TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
 
+          # --- Model hyper-parameters (same as before, tweak if you want) ---
           ADR_PERIOD: "14"
           MA_FAST: "10"
           MA_SLOW: "22"
@@ -57,22 +67,28 @@ jobs:
 
           TOP_N_TO_REPORT: "40"
           TOP_N_PREVIEW: "20"
+
+          # small sleep between Polygon calls (used by v2 script)
           POLYGON_SLEEP_SECONDS: "0.02"
+
         run: |
-          echo "=== Repo contents ==="
-          ls -la
-          echo "=== Running swing_scanner_v2.py ==="
+          # ✅ FIXED: actually run the script when the file exists
+          if [ ! -f "swing_scanner_v2.py" ]; then
+            echo "::error ::swing_scanner_v2.py not found at repo root."
+            ls -la
+            exit 1
+          fi
+
+          echo "Starting swing_scanner_v2.py..."
           python swing_scanner_v2.py
 
       - name: List files (debug)
         if: always()
         run: ls -la
 
-      - name: Upload CSV artifacts
+      - name: Upload CSV artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: breakout-v2-results
-          path: |
-            allus_breakout_v2_*.csv
-            allus_breakout_v2_preview_*.csv
+          path: allus_breakout_v2_*.csv
