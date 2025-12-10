@@ -24,18 +24,12 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip setuptools wheel
-          pip install numpy pandas requests ta yahoo_fin
-
-      - name: Run v2 pre-market breakout screen (swing_scanner_v2.py)
+            - name: Run v2 pre-market breakout screen (swing_scanner_v2.py)
         env:
           POLYGON_API_KEY:       ${{ secrets.POLYGON_API_KEY }}
           TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
 
-          # --- model tuning (feel free to tweak later) ---
           ADR_PERIOD: "14"
           MA_FAST: "10"
           MA_SLOW: "22"
@@ -64,16 +58,11 @@ jobs:
 
           TOP_N_TO_REPORT: "40"
           TOP_N_PREVIEW: "20"
-
-          # small sleep per Polygon request to be nice on free tier
           POLYGON_SLEEP_SECONDS: "0.02"
-
         run: |
-          if [ ! -f "swing_scanner_v2.py" ]; then
-            echo "::error ::swing_scanner_v2.py not found at repo root."
-            ls -la
-            exit 1
-          fi
+          echo "=== Repo contents ==="
+          ls -la
+          echo "=== Running swing_scanner_v2.py ==="
           python swing_scanner_v2.py
 
       - name: List files (debug)
