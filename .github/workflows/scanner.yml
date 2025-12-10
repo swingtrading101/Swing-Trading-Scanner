@@ -3,8 +3,8 @@ name: Pre-Market Breakout Screen v2
 on:
   workflow_dispatch:
   schedule:
-    # 13:10 UTC = 8:10am US Eastern (adjust if needed)
-    - cron: "10 13 * * 1-5"
+    # 10:15 UTC = 5:15am ET during Standard Time (adjust if needed)
+    - cron: "15 10 * * 1-5"
 
 jobs:
   run-screen:
@@ -12,7 +12,7 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Show repo contents (debug)
         run: |
@@ -20,29 +20,22 @@ jobs:
           ls -la
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.11"
 
-      - name: Install dependencies (force websockets last)
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          # Core dependencies
-          pip install yahoo_fin beautifulsoup4 html5lib lxml
-          pip install "yfinance==0.2.40" pandas numpy ta requests
-          # Fix websockets compatibility
-          pip install --upgrade --force-reinstall "websockets==11.0.3"
-          # Quick sanity check
-          python - <<'PY'
-          import websockets, yfinance
-          print("websockets:", websockets.__version__)
-          print("yfinance:", yfinance.__version__)
-          from websockets.sync.client import connect
-          print("websockets.sync import OK ✓")
-          PY
+          pip install numpy pandas requests ta yahoo_fin
 
       - name: Run v2 pre-market breakout screen (swing_scanner_v2.py)
         env:
+          POLYGON_API_KEY:       ${{ secrets.POLYGON_API_KEY }}
+          TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
+
+          # --- model tuning (feel free to tweak later) ---
           ADR_PERIOD: "14"
           MA_FAST: "10"
           MA_SLOW: "22"
@@ -50,38 +43,35 @@ jobs:
           RS_LOOKBACK_MONTHS: "6"
           HIGH_LOOKBACK_DAYS: "120"
 
-          # --- Volatility + liquidity ---
-          MIN_ADR_PCT: "4.0"        # was 5
-          MAX_ADR_PCT: "16.0"       # was 12
-          MIN_AVG_VOL_30D: "10000000"   # was 30000000 (much looser)
+          MIN_ADR_PCT: "5"
+          MAX_ADR_PCT: "12"
+          MIN_AVG_VOL_30D: "30000000"
           MIN_PRICE: "1.0"
+          MIN_RS_PCTILE: "0.98"
 
-          # --- Relative strength ---
-          MIN_RS_PCTILE: "0.95"     # was 0.98 (top 5% instead of top 2%)
-
-          # --- Prefilter universe ---
           PREFILTER_MIN_PRICE: "3.0"
-          PREFILTER_MIN_AVG_VOL5: "1000000"   # was 5,000,000
-          PREFILTER_TOP_N_BY_DOLLAR_VOL: "2000"  # scan a bit more names
+          PREFILTER_MIN_AVG_VOL5: "5000000"
+          PREFILTER_TOP_N_BY_DOLLAR_VOL: "1200"
 
-          # --- Base structure / extension ---
-          MAX_BASE_DEPTH_PCT: "40"      # was 35
-          MAX_DIST_FROM_HIGH_PCT: "12"  # was 8
-          MAX_DIST_FROM_22SMA_PCT: "25" # was 15
+          MAX_BASE_DEPTH_PCT: "35"
+          MAX_DIST_FROM_HIGH_PCT: "8"
+          MAX_DIST_FROM_22SMA_PCT: "15"
 
-          # --- VCP contraction window ---
           VCP_SHORT: "10"
           VCP_LONG: "40"
-          MIN_VCP_RATIO: "0.15"   # was 0.2
-          MAX_VCP_RATIO: "0.85"   # was 0.7
+          MIN_VCP_RATIO: "0.2"
+          MAX_VCP_RATIO: "0.7"
 
           TOP_N_TO_REPORT: "40"
+          TOP_N_PREVIEW: "20"
 
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          # small sleep per Polygon request to be nice on free tier
+          POLYGON_SLEEP_SECONDS: "0.02"
+
         run: |
           if [ ! -f "swing_scanner_v2.py" ]; then
             echo "::error ::swing_scanner_v2.py not found at repo root."
+            ls -la
             exit 1
           fi
           python swing_scanner_v2.py
@@ -90,9 +80,11 @@ jobs:
         if: always()
         run: ls -la
 
-      - name: Upload CSV artifact
+      - name: Upload CSV artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: premarket-breakout-v2-results
-          path: allus_breakout_v2_*.csv
+          name: breakout-v2-results
+          path: |
+            allus_breakout_v2_*.csv
+            allus_breakout_v2_preview_*.csv
