@@ -43,42 +43,42 @@ jobs:
 
       - name: Run v2 pre-market breakout screen (swing_scanner_v2.py)
         env:
-          # --- Core lookbacks / structure ---
-          ADR_PERIOD: "14"                   # avg daily range window
-          MA_FAST: "10"                      # fast MA (trend / structure)
-          MA_SLOW: "22"                      # key MA you mentioned
-          AVG_VOL_LOOKBACK: "30"             # avg volume period
-          RS_LOOKBACK_MONTHS: "6"            # RS vs SPY lookback
-          HIGH_LOOKBACK_DAYS: "120"          # recent high window (base / breakout)
+          ADR_PERIOD: "14"
+          MA_FAST: "10"
+          MA_SLOW: "22"
+          AVG_VOL_LOOKBACK: "30"
+          RS_LOOKBACK_MONTHS: "6"
+          HIGH_LOOKBACK_DAYS: "120"
 
-          # --- Liquidity / minimums ---
-          MIN_ADR_PCT: "5"                   # your original >5% ADR idea
-          MAX_ADR_PCT: "12"                  # avoid too crazy / already blown out
-          MIN_AVG_VOL_30D: "30000000"        # >30M sh/day like your notes
-          MIN_PRICE: "1.0"                   # absolute floor
-          MIN_RS_PCTILE: "0.98"              # top 2% relative strength
+          # --- Volatility + liquidity ---
+          MIN_ADR_PCT: "4.0"        # was 5
+          MAX_ADR_PCT: "16.0"       # was 12
+          MIN_AVG_VOL_30D: "10000000"   # was 30000000 (much looser)
+          MIN_PRICE: "1.0"
 
-          # --- Universe prefilter (quick coarse screen) ---
-          PREFILTER_MIN_PRICE: "3.0"         # coarse price floor
-          PREFILTER_MIN_AVG_VOL5: "5000000"  # 5d avg volume floor
-          PREFILTER_TOP_N_BY_DOLLAR_VOL: "1500"  # universe cap by dollar volume
+          # --- Relative strength ---
+          MIN_RS_PCTILE: "0.95"     # was 0.98 (top 5% instead of top 2%)
 
-          # --- Base / breakout proximity ---
-          MAX_BASE_DEPTH_PCT: "35"           # base not deeper than ~35%
-          MAX_DIST_FROM_HIGH_PCT: "8"        # within 8% of recent 120d high
-          MAX_DIST_FROM_22SMA_PCT: "15"      # not too far from 22d MA
+          # --- Prefilter universe ---
+          PREFILTER_MIN_PRICE: "3.0"
+          PREFILTER_MIN_AVG_VOL5: "1000000"   # was 5,000,000
+          PREFILTER_TOP_N_BY_DOLLAR_VOL: "2000"  # scan a bit more names
 
-          # --- Volatility contraction (VCP-style filter) ---
-          VCP_SHORT: "10"                    # short vol window
-          VCP_LONG: "40"                     # long vol window
-          MIN_VCP_RATIO: "0.2"               # short vol at least 20% of long (no dead stocks)
-          MAX_VCP_RATIO: "0.7"               # but clearly contracting vs long-term
+          # --- Base structure / extension ---
+          MAX_BASE_DEPTH_PCT: "40"      # was 35
+          MAX_DIST_FROM_HIGH_PCT: "12"  # was 8
+          MAX_DIST_FROM_22SMA_PCT: "25" # was 15
 
-          # --- Reporting / Telegram ---
-          TOP_N_TO_REPORT: "40"              # how many to rank + save
+          # --- VCP contraction window ---
+          VCP_SHORT: "10"
+          VCP_LONG: "40"
+          MIN_VCP_RATIO: "0.15"   # was 0.2
+          MAX_VCP_RATIO: "0.85"   # was 0.7
+
+          TOP_N_TO_REPORT: "40"
+
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-
         run: |
           if [ ! -f "swing_scanner_v2.py" ]; then
             echo "::error ::swing_scanner_v2.py not found at repo root."
