@@ -3,8 +3,7 @@ name: Pre-Market Breakout Screen v2
 on:
   workflow_dispatch:
   schedule:
-    # 10:15 UTC = 5:15am ET during Standard Time (adjust if needed)
-    - cron: "15 10 * * 1-5"
+    - cron: "10 13 * * 1-5"
 
 jobs:
   run-screen:
