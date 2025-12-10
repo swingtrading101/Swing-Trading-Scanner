@@ -32,9 +32,9 @@ HIGH_LOOKBACK_DAYS = int(os.getenv("HIGH_LOOKBACK_DAYS", "120"))
 
 MIN_ADR_PCT = float(os.getenv("MIN_ADR_PCT", "5"))
 MAX_ADR_PCT = float(os.getenv("MAX_ADR_PCT", "12"))
-MIN_AVG_VOL_30D = float(os.getenv("MIN_AVG_VOL_30D", "30000000"))
+MIN_AVG_VOL_30D = float(os.getenv("MIN_AVG_VOL_30D", "10000000"))
 MIN_PRICE = float(os.getenv("MIN_PRICE", "1.0"))
-MIN_RS_PCTILE = float(os.getenv("MIN_RS_PCTILE", "0.98"))
+MIN_RS_PCTILE = float(os.getenv("MIN_RS_PCTILE", "0.95"))
 
 PREFILTER_MIN_PRICE = float(os.getenv("PREFILTER_MIN_PRICE", "3.0"))
 PREFILTER_MIN_AVG_VOL5 = float(os.getenv("PREFILTER_MIN_AVG_VOL5", "5000000"))
