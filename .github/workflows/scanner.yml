@@ -1,11 +1,10 @@
-name: After-Hours Gap Scan
+name: Pre-Market Breakout Screen v2
 
 on:
-  # Run manually if you want
   workflow_dispatch:
-  # Weekdays at 21:10 UTC ≈ 4:10 PM US Eastern (after regular close)
   schedule:
-    - cron: "10 21 * * 1-5"
+    # 13:10 UTC = 8:10am US Eastern (adjust if needed)
+    - cron: "10 13 * * 1-5"
 
 jobs:
   run-screen:
@@ -25,38 +24,67 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install dependencies
+      - name: Install dependencies (force websockets last)
         run: |
           python -m pip install --upgrade pip setuptools wheel
+          # Core dependencies
           pip install yahoo_fin beautifulsoup4 html5lib lxml
-          pip install "yfinance==0.2.40" pandas numpy requests
+          pip install "yfinance==0.2.40" pandas numpy ta requests
+          # Fix websockets compatibility
+          pip install --upgrade --force-reinstall "websockets==11.0.3"
+          # Quick sanity check
+          python - <<'PY'
+          import websockets, yfinance
+          print("websockets:", websockets.__version__)
+          print("yfinance:", yfinance.__version__)
+          from websockets.sync.client import connect
+          print("websockets.sync import OK ✓")
+          PY
 
-      - name: Run after-hours gap scan (swing_scanner.py)
+      - name: Run v2 pre-market breakout screen (swing_scanner_v2.py)
         env:
-          # --- Universe prefilter (keeps runtime reasonable) ---
-          PREFILTER_MIN_PRICE: "0.75"
-          PREFILTER_MIN_AVG_VOL5: "150000"
-          PREFILTER_TOP_N_BY_VOL: "1200"
+          # --- Core lookbacks / structure ---
+          ADR_PERIOD: "14"                   # avg daily range window
+          MA_FAST: "10"                      # fast MA (trend / structure)
+          MA_SLOW: "22"                      # key MA you mentioned
+          AVG_VOL_LOOKBACK: "30"             # avg volume period
+          RS_LOOKBACK_MONTHS: "6"            # RS vs SPY lookback
+          HIGH_LOOKBACK_DAYS: "120"          # recent high window (base / breakout)
 
-          # --- Core after-hours / next-day gap model params ---
-          AH_MIN_PRICE: "0.75"
-          AH_MAX_PRICE: "20.0"
-          AH_MIN_MC: "20000000"         # 20M
-          AH_MAX_MC: "750000000"        # 750M
-          AH_MIN_REG_VOL: "300000"      # last-day volume
-          AH_MIN_AVG_VOL_20D: "200000"  # 20d avg volume
-          AH_MIN_AH_PCT: "2.0"          # min after-hours % move
-          AH_MIN_RVOL: "1.5"            # min relative volume
+          # --- Liquidity / minimums ---
+          MIN_ADR_PCT: "5"                   # your original >5% ADR idea
+          MAX_ADR_PCT: "12"                  # avoid too crazy / already blown out
+          MIN_AVG_VOL_30D: "30000000"        # >30M sh/day like your notes
+          MIN_PRICE: "1.0"                   # absolute floor
+          MIN_RS_PCTILE: "0.98"              # top 2% relative strength
 
+          # --- Universe prefilter (quick coarse screen) ---
+          PREFILTER_MIN_PRICE: "3.0"         # coarse price floor
+          PREFILTER_MIN_AVG_VOL5: "5000000"  # 5d avg volume floor
+          PREFILTER_TOP_N_BY_DOLLAR_VOL: "1500"  # universe cap by dollar volume
+
+          # --- Base / breakout proximity ---
+          MAX_BASE_DEPTH_PCT: "35"           # base not deeper than ~35%
+          MAX_DIST_FROM_HIGH_PCT: "8"        # within 8% of recent 120d high
+          MAX_DIST_FROM_22SMA_PCT: "15"      # not too far from 22d MA
+
+          # --- Volatility contraction (VCP-style filter) ---
+          VCP_SHORT: "10"                    # short vol window
+          VCP_LONG: "40"                     # long vol window
+          MIN_VCP_RATIO: "0.2"               # short vol at least 20% of long (no dead stocks)
+          MAX_VCP_RATIO: "0.7"               # but clearly contracting vs long-term
+
+          # --- Reporting / Telegram ---
+          TOP_N_TO_REPORT: "40"              # how many to rank + save
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
 
         run: |
-          if [ ! -f "swing_scanner.py" ]; then
-            echo "::error ::swing_scanner.py not found at repo root."
+          if [ ! -f "swing_scanner_v2.py" ]; then
+            echo "::error ::swing_scanner_v2.py not found at repo root."
             exit 1
           fi
-          python swing_scanner.py
+          python swing_scanner_v2.py
 
       - name: List files (debug)
         if: always()
@@ -66,5 +94,5 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: afterhours-gap-scan-results
-          path: afterhours_gap_scan_*.csv
+          name: premarket-breakout-v2-results
+          path: allus_breakout_v2_*.csv
